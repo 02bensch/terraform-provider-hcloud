@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -12,12 +13,14 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+
 	"github.com/hetznercloud/hcloud-go/hcloud"
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/control"
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/hcclient"
+	"github.com/hetznercloud/terraform-provider-hcloud/internal/primaryip"
 )
 
 // ResourceType is the type name of the Hetzner Cloud Server resource.
@@ -30,6 +33,7 @@ func Resource() *schema.Resource {
 		ReadContext:   resourceServerRead,
 		UpdateContext: resourceServerUpdate,
 		DeleteContext: resourceServerDelete,
+		CustomizeDiff: resourceServerCustomizeDiff,
 
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
@@ -96,6 +100,11 @@ func Resource() *schema.Resource {
 				Optional: true,
 				Default:  false,
 			},
+			"allow_deprecated_images": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
 			"backup_window": {
 				Type:       schema.TypeString,
 				Deprecated: "You should remove this property from your terraform configuration.",
@@ -134,10 +143,44 @@ func Resource() *schema.Resource {
 				Type:     schema.TypeMap,
 				Optional: true,
 				ValidateDiagFunc: func(i interface{}, path cty.Path) diag.Diagnostics {
-					if ok, error := hcloud.ValidateResourceLabels(i.(map[string]interface{})); !ok {
-						return diag.Errorf(error.Error())
+					if ok, err := hcloud.ValidateResourceLabels(i.(map[string]interface{})); !ok {
+						return diag.Errorf(err.Error())
 					}
 					return nil
+				},
+			},
+			"public_net": {
+				Type:     schema.TypeSet,
+				Optional: true,
+				DiffSuppressFunc: func(_, _, _ string, d *schema.ResourceData) bool {
+					// Diff is only valid if "public_net" resource is set in
+					// terraform configuration.
+					_, ok := d.GetOk("public_net")
+					return !ok // Negate because we do **not** want to suppress the diff.
+				},
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"ipv4_enabled": {
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  true,
+						},
+						"ipv6_enabled": {
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  true,
+						},
+						"ipv4": {
+							Type:     schema.TypeInt,
+							Optional: true,
+							Computed: true,
+						},
+						"ipv6": {
+							Type:     schema.TypeInt,
+							Optional: true,
+							Computed: true,
+						},
+					},
 				},
 			},
 			"network": {
@@ -163,6 +206,7 @@ func Resource() *schema.Resource {
 						"alias_ips": {
 							Type:     schema.TypeSet,
 							Elem:     &schema.Schema{Type: schema.TypeString},
+							Computed: true,
 							Optional: true,
 						},
 						"mac_address": {
@@ -226,12 +270,32 @@ func userDataDiffSuppress(k, old, new string, d *schema.ResourceData) bool {
 func resourceServerCreate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	c := m.(*hcloud.Client)
 
-	var err error
-	image, _, err := c.Image.Get(ctx, d.Get("image").(string))
+	// Get server type to select correct image (based on arch)
+	serverType, _, err := c.ServerType.Get(ctx, d.Get("server_type").(string))
+	if err != nil {
+		return hcclient.ErrorToDiag(err)
+	}
+	if serverType == nil {
+		return diag.Errorf("server type %s not found", d.Get("server_type"))
+	}
+
+	imageNameOrID := d.Get("image").(string)
+	image, _, err := c.Image.GetForArchitecture(ctx, imageNameOrID, serverType.Architecture)
 	if err != nil {
 		return hcclient.ErrorToDiag(err)
 	}
 
+	if image == nil {
+		return diag.Errorf("image %s for architecture %s not found", imageNameOrID, serverType.Architecture)
+	}
+
+	if image.IsDeprecated() {
+		if d.Get("allow_deprecated_images").(bool) {
+			tflog.Warn(ctx, fmt.Sprintf("image %s is deprecated. It will continue to be available until %s", image.Name, image.Deprecated.AddDate(0, 3, 0).Format("2006-01-02")))
+		} else {
+			return diag.Errorf("image %s is deprecated. It will continue to be available until %s. If you want to use it, specify the allow_deprecated_images option.", image.Name, image.Deprecated.AddDate(0, 3, 0).Format("2006-01-02"))
+		}
+	}
 	opts := hcloud.ServerCreateOpts{
 		Name: d.Get("name").(string),
 		ServerType: &hcloud.ServerType{
@@ -276,6 +340,34 @@ func resourceServerCreate(ctx context.Context, d *schema.ResourceData, m interfa
 		opts.PlacementGroup = placementGroup
 	}
 
+	if publicNet, ok := d.GetOk("public_net"); ok {
+		createPublicNet := hcloud.ServerCreatePublicNet{}
+		for _, publicNetBlock := range publicNet.(*schema.Set).List() {
+			publicNetEntry := publicNetBlock.(map[string]interface{})
+			if enableIPv4, err := toServerPublicNet[bool](publicNetEntry, "ipv4_enabled"); err == nil {
+				createPublicNet.EnableIPv4 = enableIPv4
+			}
+			if enableIPv6, err := toServerPublicNet[bool](publicNetEntry, "ipv6_enabled"); err == nil {
+				createPublicNet.EnableIPv6 = enableIPv6
+			}
+			if ipv4, err := toServerPublicNet[int](publicNetEntry, "ipv4"); err == nil && ipv4 != 0 {
+				createPublicNet.EnableIPv4 = true
+				createPublicNet.IPv4 = &hcloud.PrimaryIP{ID: ipv4}
+			}
+			if ipv6, err := toServerPublicNet[int](publicNetEntry, "ipv6"); err == nil && ipv6 != 0 {
+				createPublicNet.EnableIPv6 = true
+				createPublicNet.IPv6 = &hcloud.PrimaryIP{ID: ipv6}
+			}
+		}
+		opts.PublicNet = &createPublicNet
+		// if the server has no public net, it has to be created without starting it
+		if err := onServerCreateWithoutPublicNet(&opts, d, func(opts *hcloud.ServerCreateOpts) error {
+			opts.StartAfterCreate = hcloud.Ptr(false)
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
 	res, _, err := c.Server.Create(ctx, opts)
 	if err != nil {
 		return hcclient.ErrorToDiag(err)
@@ -297,6 +389,25 @@ func resourceServerCreate(ctx context.Context, d *schema.ResourceData, m interfa
 			if err := inlineAttachServerToNetwork(ctx, c, res.Server, nwData); err != nil {
 				return hcclient.ErrorToDiag(err)
 			}
+		}
+		// if the server was created without public net, the server is now still offline and has to be powered on after
+		// network assignment
+		if err := onServerCreateWithoutPublicNet(&opts, d, func(opts *hcloud.ServerCreateOpts) error {
+			if err := powerOnServer(ctx, c, res.Server); err != nil {
+				return err
+			}
+
+			// Workaround for network interface issue
+			powerOffTwo, _, err := c.Server.Poweroff(ctx, res.Server)
+			if err != nil {
+				return err
+			}
+			if err := hcclient.WaitForAction(ctx, &c.Action, powerOffTwo); err != nil {
+				return fmt.Errorf("power off server: %v", err)
+			}
+			return powerOnServer(ctx, c, res.Server)
+		}); err != nil {
+			return err
 		}
 	}
 
@@ -516,6 +627,13 @@ func resourceServerUpdate(ctx context.Context, d *schema.ResourceData, m interfa
 		}
 	}
 
+	if d.HasChange("public_net") {
+		o, n := d.GetChange("public_net")
+		if err := updatePublicNet(ctx, o, n, c, server); err != nil {
+			return err
+		}
+	}
+
 	if d.HasChange("placement_group") {
 		placementGroupID := d.Get("placement_group").(int)
 		if err := setPlacementGroup(ctx, c, server, placementGroupID); err != nil {
@@ -524,15 +642,186 @@ func resourceServerUpdate(ctx context.Context, d *schema.ResourceData, m interfa
 	}
 
 	if d.HasChange("delete_protection") || d.HasChange("rebuild_protection") {
-		delete := d.Get("delete_protection").(bool)
+		deletionProtection := d.Get("delete_protection").(bool)
 		rebuild := d.Get("rebuild_protection").(bool)
-		if err := setProtection(ctx, c, server, delete, rebuild); err != nil {
+		if err := setProtection(ctx, c, server, deletionProtection, rebuild); err != nil {
 			return hcclient.ErrorToDiag(err)
 		}
 	}
 
 	d.Partial(false)
 	return resourceServerRead(ctx, d, m)
+}
+
+func updatePublicNet(ctx context.Context, o interface{}, n interface{}, c *hcloud.Client, server *hcloud.Server) diag.Diagnostics {
+	diffToRemove := o.(*schema.Set).Difference(n.(*schema.Set))
+	diffToAdd := n.(*schema.Set).Difference(o.(*schema.Set))
+
+	ipv4IDToRemove := 0
+	ipv6IDToRemove := 0
+	ipv4EnabledInRemoveDiff := true
+	ipv6EnabledInRemoveDiff := true
+	// collect ip IDs which got removed
+	for _, d := range diffToRemove.List() {
+		fields := d.(map[string]interface{})
+		ipv4IDToRemove, ipv6IDToRemove = collectPrimaryIPIDs(fields)
+		if ipv4Enabled, err := toPublicNetPrimaryIPField[bool](fields, "ipv4_enabled"); err == nil {
+			ipv4EnabledInRemoveDiff = ipv4Enabled
+		}
+		if ipv6Enabled, err := toPublicNetPrimaryIPField[bool](fields, "ipv6_enabled"); err == nil {
+			ipv6EnabledInRemoveDiff = ipv6Enabled
+		}
+	}
+
+	shutdown, _, err := c.Server.Poweroff(ctx, &hcloud.Server{ID: server.ID})
+	if err != nil {
+		return hcclient.ErrorToDiag(err)
+	}
+
+	if err := hcclient.WaitForAction(ctx, &c.Action, shutdown); err != nil {
+		return hcclient.ErrorToDiag(err)
+	}
+
+	// if public net block is removed, auto generate primary ips & remove existing
+	if diffToAdd.Len() == 0 {
+		if err := publicNetRemovedDecision(ctx,
+			c,
+			server,
+			server.PublicNet.IPv4.ID,
+			ipv4IDToRemove,
+			hcloud.PrimaryIPTypeIPv4); err != nil {
+			return err
+		}
+		if err := publicNetRemovedDecision(ctx,
+			c,
+			server,
+			server.PublicNet.IPv6.ID,
+			ipv6IDToRemove,
+			hcloud.PrimaryIPTypeIPv6); err != nil {
+			return err
+		}
+	}
+
+	// Check ip bool together with IDs to trigger the right actions
+	for _, d := range diffToAdd.List() {
+		fields := d.(map[string]interface{})
+		ipv4IDToAdd, ipv6IDToAdd := collectPrimaryIPIDs(fields)
+
+		if ipv4Enabled, err := toPublicNetPrimaryIPField[bool](fields, "ipv4_enabled"); err == nil {
+			if err := publicNetUpdateDecision(ctx,
+				c,
+				ipv4Enabled,
+				ipv4EnabledInRemoveDiff,
+				ipv4IDToAdd,
+				ipv4IDToRemove,
+				server,
+				server.PublicNet.IPv4.ID,
+				hcloud.PrimaryIPTypeIPv4); err != nil {
+				return err
+			}
+		}
+		if ipv6Enabled, err := toPublicNetPrimaryIPField[bool](fields, "ipv6_enabled"); err == nil {
+			if err := publicNetUpdateDecision(ctx,
+				c, ipv6Enabled,
+				ipv6EnabledInRemoveDiff,
+				ipv6IDToAdd,
+				ipv6IDToRemove,
+				server,
+				server.PublicNet.IPv6.ID,
+				hcloud.PrimaryIPTypeIPv6); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := powerOnServer(ctx, c, server); err != nil {
+		return hcclient.ErrorToDiag(err)
+	}
+
+	return nil
+}
+
+func publicNetUpdateDecision(ctx context.Context,
+	c *hcloud.Client,
+	ipEnabled bool,
+	ipEnabledInRemoveDiff bool,
+	ipID int,
+	ipIDInRemoveDiff int,
+	server *hcloud.Server,
+	serverIPID int,
+	ipType hcloud.PrimaryIPType) diag.Diagnostics {
+	switch {
+	// if ip set true + ip id, remove all previous assigned ipv4 + assign new
+	case ipEnabled && ipID != 0:
+		if serverIPID != 0 {
+			// if primary ip is managed + unassigned before, this might throw an error
+			if err := primaryip.UnassignPrimaryIP(ctx, c, serverIPID); err != nil {
+				return err
+			}
+			if ipIDInRemoveDiff == 0 {
+				if err := primaryip.DeletePrimaryIP(ctx, c, &hcloud.PrimaryIP{ID: serverIPID}); err != nil {
+					if err := powerOnServer(ctx, c, server); err != nil {
+						return hcclient.ErrorToDiag(err)
+					}
+					return err
+				}
+			}
+		}
+		if err := primaryip.AssignPrimaryIP(ctx, c, ipID, server.ID); err != nil {
+			if err := powerOnServer(ctx, c, server); err != nil {
+				return hcclient.ErrorToDiag(err)
+			}
+			return err
+		}
+	// if ip set from true -> false + no ip id, unassign + delete PrimaryIP
+	case !ipEnabled && ipID == 0:
+		if serverIPID != 0 {
+			if err := primaryip.UnassignPrimaryIP(ctx, c, serverIPID); err != nil {
+				if err := powerOnServer(ctx, c, server); err != nil {
+					return hcclient.ErrorToDiag(err)
+				}
+				return err
+			}
+			if ipIDInRemoveDiff == 0 {
+				if err := primaryip.DeletePrimaryIP(ctx, c, &hcloud.PrimaryIP{ID: serverIPID}); err != nil {
+					if err := powerOnServer(ctx, c, server); err != nil {
+						return hcclient.ErrorToDiag(err)
+					}
+					return err
+				}
+			}
+		}
+
+	// if ip set from false -> true, create & assign auto generated primary ip
+	case ipEnabled && ipID == 0:
+		// unassign managed ip when id is removed
+		if ipEnabledInRemoveDiff && ipIDInRemoveDiff != 0 {
+			if err := primaryip.UnassignPrimaryIP(ctx, c, ipIDInRemoveDiff); err != nil {
+				if err := powerOnServer(ctx, c, server); err != nil {
+					return hcclient.ErrorToDiag(err)
+				}
+				return err
+			}
+		}
+		if !ipEnabledInRemoveDiff && ipIDInRemoveDiff == 0 ||
+			ipEnabledInRemoveDiff && ipIDInRemoveDiff != 0 {
+			if err := primaryip.CreateRandomPrimaryIP(ctx, c, server, ipType); err != nil {
+				if err := powerOnServer(ctx, c, server); err != nil {
+					return hcclient.ErrorToDiag(err)
+				}
+				return err
+			}
+		}
+
+	// error on ip set from true -> false + ipv4 ID provided
+	case !ipEnabled && ipID != 0:
+		if err := powerOnServer(ctx, c, server); err != nil {
+			return hcclient.ErrorToDiag(err)
+		}
+		return hcclient.ErrorToDiag(
+			fmt.Errorf("this operation is not allowed: ipv4_enabled = false | ipv4 = %d", ipID))
+	}
+	return nil
 }
 
 func resourceServerDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
@@ -544,7 +833,13 @@ func resourceServerDelete(ctx context.Context, d *schema.ResourceData, m interfa
 		d.SetId("")
 		return nil
 	}
-	if _, err := client.Server.Delete(ctx, &hcloud.Server{ID: serverID}); err != nil {
+	result, _, err := client.Server.DeleteWithResult(ctx, &hcloud.Server{ID: serverID})
+	if err != nil {
+		return hcclient.ErrorToDiag(err)
+	}
+
+	err = hcclient.WaitForAction(ctx, &client.Action, result.Action)
+	if err != nil {
 		return hcclient.ErrorToDiag(err)
 	}
 
@@ -566,20 +861,18 @@ func setBackups(ctx context.Context, c *hcloud.Client, server *hcloud.Server, ba
 		if err != nil {
 			return err
 		}
-		if err := hcclient.WaitForAction(ctx, &c.Action, action); err != nil {
-			return err
-		}
-		return nil
+
+		return hcclient.WaitForAction(ctx, &c.Action, action)
 	}
+
 	if server.BackupWindow == "" && backups {
 		action, _, err := c.Server.EnableBackup(ctx, server, "")
 		if err != nil {
 			return err
 		}
-		if err := hcclient.WaitForAction(ctx, &c.Action, action); err != nil {
-			return err
-		}
+		return hcclient.WaitForAction(ctx, &c.Action, action)
 	}
+
 	return nil
 }
 
@@ -605,6 +898,12 @@ func setISO(ctx context.Context, c *hcloud.Client, server *hcloud.Server, isoIDO
 
 		if iso == nil {
 			return fmt.Errorf("ISO not found: %s", isoIDOrName)
+		}
+
+		// If ISO architecture is empty -> wildcard/unknown     --> allow
+		// If ISO architecture is set and does not match server -->  deny
+		if iso.Architecture != nil && *iso.Architecture != server.ServerType.Architecture {
+			return errors.New("failed to attach iso: iso has a different architecture than the server")
 		}
 
 		a, _, err := c.Server.AttachISO(ctx, server, iso)
@@ -777,9 +1076,10 @@ func newIPSet(f schema.SchemaSetFunc, ips []net.IP) *schema.Set {
 
 func setServerSchema(d *schema.ResourceData, s *hcloud.Server) {
 	for key, val := range getServerAttributes(d, s) {
-		if key == "id" {
+		switch key {
+		case "id":
 			d.SetId(strconv.Itoa(val.(int)))
-		} else {
+		default:
 			d.Set(key, val)
 		}
 	}
@@ -810,7 +1110,9 @@ func getServerAttributes(d *schema.ResourceData, s *hcloud.Server) map[string]in
 	}
 
 	if s.Image != nil {
-		if s.Image.Name != "" {
+		if s.Image.Name != "" && strconv.Itoa(s.Image.ID) != d.Get("image") {
+			// Only use the image name if the image is official (Name != "")
+			// AND the user did not explicitly specify the image id
 			res["image"] = s.Image.Name
 		} else {
 			res["image"] = fmt.Sprintf("%d", s.Image.ID)
@@ -906,8 +1208,119 @@ func setProtection(ctx context.Context, c *hcloud.Client, server *hcloud.Server,
 		return err
 	}
 
-	if err := hcclient.WaitForAction(ctx, &c.Action, action); err != nil {
+	return hcclient.WaitForAction(ctx, &c.Action, action)
+}
+
+func toServerPublicNet[V int | bool](field map[string]interface{}, key string) (V, error) {
+	var op = "toServerPublicNet"
+	var valType V
+	if valType, ok := field[key].(V); ok {
+		return valType, nil
+	}
+	return valType, fmt.Errorf("%s: unable to apply value to public_net values", op)
+}
+
+func collectPrimaryIPIDs(primaryIPList map[string]interface{}) (int, int) {
+	var IPv4ID = 0
+	var IPv6ID = 0
+	if id, err := toPublicNetPrimaryIPField[int](primaryIPList, "ipv4"); id != 0 && err == nil {
+		IPv4ID = id
+	}
+	if id, err := toPublicNetPrimaryIPField[int](primaryIPList, "ipv6"); id != 0 && err == nil {
+		IPv6ID = id
+	}
+	return IPv4ID, IPv6ID
+}
+
+func toPublicNetPrimaryIPField[V int | bool](field map[string]interface{}, key string) (V, error) {
+	var op = "toPublicNetPrimaryIPField"
+	var fieldValue V
+	if fieldValue, ok := field[key].(V); ok {
+		return fieldValue, nil
+	}
+	return fieldValue, fmt.Errorf("%s: field does not contain ID", op)
+}
+
+func onServerCreateWithoutPublicNet(opts *hcloud.ServerCreateOpts, d *schema.ResourceData, fn func(opts *hcloud.ServerCreateOpts) error) diag.Diagnostics {
+	if _, ok := d.GetOk("network"); ok && opts.PublicNet != nil {
+		if !opts.PublicNet.EnableIPv6 && !opts.PublicNet.EnableIPv4 {
+			if err := fn(opts); err != nil {
+				return hcclient.ErrorToDiag(err)
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+func powerOnServer(ctx context.Context, c *hcloud.Client, server *hcloud.Server) error {
+	err := control.Retry(control.DefaultRetries, func() error {
+		powerOn, _, err := c.Server.Poweron(ctx, server)
+		if err != nil {
+			return err
+		}
+
+		return hcclient.WaitForAction(ctx, &c.Action, powerOn)
+	})
+	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func publicNetRemovedDecision(ctx context.Context,
+	c *hcloud.Client,
+	server *hcloud.Server,
+	serverIPID int,
+	ipIDToRemove int,
+	ipType hcloud.PrimaryIPType) diag.Diagnostics {
+	if server.PublicNet.IPv4.ID != 0 && ipIDToRemove != 0 {
+		if err := primaryip.UnassignPrimaryIP(ctx, c, serverIPID); err != nil {
+			return err
+		}
+		if err := primaryip.CreateRandomPrimaryIP(ctx, c, server, ipType); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resourceServerCustomizeDiff(_ context.Context, d *schema.ResourceDiff, _ interface{}) error {
+	return validateUniqueNetworkIDs(d)
+}
+
+func validateUniqueNetworkIDs(d *schema.ResourceDiff) error {
+	// Validate that every network set element uses unique network id
+	if n, ok := d.GetOkExists("network"); ok {
+		networks, ok := n.(*schema.Set)
+		if !ok {
+			return fmt.Errorf("network has unexpected type: %T", n)
+		}
+
+		uniqueNetworkIDs := map[int]bool{}
+
+		for _, networkI := range networks.List() {
+			network, ok := networkI.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("network item has unexpected type: %T", networkI)
+			}
+
+			networkID, ok := network["network_id"]
+			if !ok {
+				continue
+			}
+
+			id, ok := networkID.(int)
+			if !ok {
+				return fmt.Errorf("network id has unexpected type: %T", networkID)
+			}
+
+			if uniqueNetworkIDs[id] {
+				return fmt.Errorf("server is only allowed to be attached to each network once: %d", networkID)
+			}
+
+			uniqueNetworkIDs[id] = true
+		}
 	}
 
 	return nil

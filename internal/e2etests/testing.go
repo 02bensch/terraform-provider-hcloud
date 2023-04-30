@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hetznercloud/hcloud-go/hcloud"
 	tfhcloud "github.com/hetznercloud/terraform-provider-hcloud/hcloud"
 )
 
@@ -17,11 +18,17 @@ const (
 	// TestServerType is the default server type used in all tests
 	TestServerType = "cx11"
 
+	// TestArchitecture is the default architecture used in all tests, should match the architecture of the TestServerType.
+	TestArchitecture = hcloud.ArchitectureX86
+
 	// TestLoadBalancerType is the default Load Balancer type used in all tests
 	TestLoadBalancerType = "lb11"
 
+	// TestDataCenter is the default datacenter where we execute our tests.
+	TestDataCenter = "hel1-dc2"
+
 	// TestLocationName is the default location where we execute our tests.
-	TestLocationName = "fsn1"
+	TestLocationName = "hel1"
 )
 
 func init() {

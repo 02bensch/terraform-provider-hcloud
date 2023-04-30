@@ -9,6 +9,7 @@ import (
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/firewall"
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/hcclient"
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/placementgroup"
+	"github.com/hetznercloud/terraform-provider-hcloud/internal/primaryip"
 
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/snapshot"
 
@@ -64,6 +65,7 @@ func Provider() *schema.Provider {
 			"poll_interval": {
 				Type:     schema.TypeString,
 				Optional: true,
+				Default:  "500ms",
 			},
 		},
 		ResourcesMap: map[string]*schema.Resource{
@@ -74,6 +76,7 @@ func Provider() *schema.Provider {
 			firewall.AttachmentResourceType:   firewall.AttachmentResource(),
 			floatingip.AssignmentResourceType: floatingip.AssignmentResource(),
 			floatingip.ResourceType:           floatingip.Resource(),
+			primaryip.ResourceType:            primaryip.Resource(),
 			loadbalancer.NetworkResourceType:  loadbalancer.NetworkResource(),
 			loadbalancer.ResourceType:         loadbalancer.Resource(),
 			loadbalancer.ServiceResourceType:  loadbalancer.ServiceResource(),
@@ -99,6 +102,8 @@ func Provider() *schema.Provider {
 			firewall.DataSourceListType:       firewall.DataSourceList(),
 			floatingip.DataSourceType:         floatingip.DataSource(),
 			floatingip.DataSourceListType:     floatingip.DataSourceList(),
+			primaryip.DataSourceType:          primaryip.DataSource(),
+			primaryip.DataSourceListType:      primaryip.DataSourceList(),
 			image.DataSourceType:              image.DataSource(),
 			image.DataSourceListType:          image.DataSourceList(),
 			loadbalancer.DataSourceType:       loadbalancer.DataSource(),
@@ -135,7 +140,7 @@ func providerConfigure(_ context.Context, d *schema.ResourceData) (interface{}, 
 		if err != nil {
 			return nil, hcclient.ErrorToDiag(err)
 		}
-		opts = append(opts, hcloud.WithPollInterval(pollInterval))
+		opts = append(opts, hcloud.WithPollBackoffFunc(hcloud.ExponentialBackoff(2, pollInterval)))
 	}
 	if logging.LogLevel() != "" {
 		opts = append(opts, hcloud.WithDebugWriter(log.Writer()))

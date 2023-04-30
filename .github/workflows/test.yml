@@ -1,45 +1,58 @@
 name: test
+
 on:
   pull_request:
+
 jobs:
   integration_tests:
-    runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        terraform_version: [ "1.0.x" ]
-    name: integration-${{ matrix.terraform_version }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Unshallow
         run: git fetch --prune --unshallow
-      - uses: hashicorp/setup-terraform@v1
+      - uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: ${{ matrix.terraform_version }}
+          terraform_version: v1.4.x
           terraform_wrapper: false
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v4
         with:
-          go-version: 1.18
+          go-version: 1.19
+      - name: HCLOUD_TOKEN
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          TTS_TOKEN: ${{ secrets.TTS_TOKEN }}
+        run: |
+          set -ueo pipefail
+          if [[ "${HCLOUD_TOKEN:-}" != "" ]]; then
+            echo "HCLOUD_TOKEN=$HCLOUD_TOKEN" >> "$GITHUB_ENV"
+          elif [[ "${TTS_TOKEN:-}" != "" ]]; then
+                    token="$(./scripts/get-token.sh)"
+                    echo "::add-mask::$token"
+                    echo "HCLOUD_TOKEN=$token" >> "$GITHUB_ENV"
+          else
+            echo "::error ::Couldn't determine HCLOUD_TOKEN. Check that repository secrets are setup correctly."
+            exit 1
+          fi
       - name: Run tests
         run: |
-          export HCLOUD_TOKEN=$(./scripts/get-token.sh)
           cat resp.json
           make testacc
           make
           ./scripts/delete-token.sh $HCLOUD_TOKEN
+
   unit_tests:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Unshallow
         run: git fetch --prune --unshallow
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v4
         with:
-          go-version: 1.18
+          go-version: 1.19
       - name: Run tests
         run: |
           make test

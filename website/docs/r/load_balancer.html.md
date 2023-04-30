@@ -34,13 +34,13 @@ resource "hcloud_load_balancer" "load_balancer" {
 
 - `name` - (Required, string) Name of the Load Balancer.
 - `load_balancer_type` - (Required, string) Type of the Load Balancer.
-- `location` - (Optional, string) Location of the Load Balancer. Require when no network_zone is set.
-- `network_zone` - (Optional, string) Network Zone of the Load Balancer. Require when no location is set.
-- `algorithm` - (Optional) Configuration of the algorithm the Load Balancer uses.
-- `labels` - (Optional, map) User-defined labels (key-value pairs) this resource should be created with.
-- `delete_protection` - (Optional, boolean) Enable or disable delete protection.
+- `location` - (Optional, string) The location name of the Load Balancer. Require when no network_zone is set.
+- `network_zone` - (Optional, string) The Network Zone of the Load Balancer. Require when no location is set.
+- `algorithm` - (Optional) Configuration of the algorithm the Load Balancer use.
+- `labels` - (Optional, map) User-defined labels (key-value pairs) should be created with.
+- `delete_protection` - (Optional, bool) Enable or disable delete protection.
 
-`algorithm` supports the following fields:
+`algorithm` support the following fields:
 - `type` - (Required, string) Type of the Load Balancer Algorithm. `round_robin` or `least_connections`
 
 ## Attributes Reference
@@ -51,12 +51,14 @@ resource "hcloud_load_balancer" "load_balancer" {
 - `location` - (string) Name of the location the Load Balancer is in.
 - `ipv4` - (string) IPv4 Address of the Load Balancer.
 - `ipv6` - (string) IPv6 Address of the Load Balancer.
-- `algorithm` - (Optional) Configuration of the algorithm the Load Balancer uses.
-- `service` - (list) List of services the Load Balancer provides.
+- `algorithm` - (Optional) Configuration of the algorithm the Load Balancer use.
+- `service` - (list) List of services a Load Balancer provides.
 - `labels` - (map) User-defined labels (key-value pairs).
-- `delete_protection` - (boolean) Whether delete protection is enabled.
+- `delete_protection` - (bool) Whether delete protection is enabled.
+- `network_id` - (int) ID of the first private network that this Load Balancer is connected to.
+- `network_ip` - (string) IP of the Load Balancer in the first private network that it is connected to.
 
-`algorithm` supports the following fields:
+`algorithm` support the following fields:
 - `type` - (string) Type of the Load Balancer Algorithm. `round_robin` or `least_connections`
 
 ## Import
@@ -64,5 +66,5 @@ resource "hcloud_load_balancer" "load_balancer" {
 Load Balancers can be imported using its `id`:
 
 ```
-terraform import hcloud_load_balancer.my_load_balancer <id>
+terraform import hcloud_load_balancer.my_load_balancer id
 ```

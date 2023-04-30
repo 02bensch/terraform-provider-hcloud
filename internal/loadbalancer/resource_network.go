@@ -115,6 +115,7 @@ func resourceLoadBalancerNetworkCreate(ctx context.Context, d *schema.ResourceDa
 	if err != nil {
 		return hcclient.ErrorToDiag(err)
 	}
+	d.SetId(generateLoadBalancerNetworkID(lb, nw))
 
 	if err := hcclient.WaitForAction(ctx, &c.Action, action); err != nil {
 		return hcclient.ErrorToDiag(err)
@@ -125,7 +126,6 @@ func resourceLoadBalancerNetworkCreate(ctx context.Context, d *schema.ResourceDa
 	if err != nil {
 		return hcclient.ErrorToDiag(err)
 	}
-	d.SetId(generateLoadBalancerNetworkID(lb, nw))
 
 	return resourceLoadBalancerNetworkRead(ctx, d, m)
 }
@@ -272,19 +272,16 @@ func setEnablePublicInterface(ctx context.Context, c *hcloud.Client, loadBalance
 		if err != nil {
 			return err
 		}
-		if err := hcclient.WaitForAction(ctx, &c.Action, action); err != nil {
-			return err
-		}
-		return nil
+
+		return hcclient.WaitForAction(ctx, &c.Action, action)
 	}
 	if !loadBalancer.PublicNet.Enabled && enablePublicInterface {
 		action, _, err := c.LoadBalancer.EnablePublicInterface(ctx, loadBalancer)
 		if err != nil {
 			return err
 		}
-		if err := hcclient.WaitForAction(ctx, &c.Action, action); err != nil {
-			return err
-		}
+
+		return hcclient.WaitForAction(ctx, &c.Action, action)
 	}
 	return nil
 }

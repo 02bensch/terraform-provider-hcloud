@@ -5,13 +5,11 @@ Terraform Provider for the Hetzner Cloud
 - Website: https://www.terraform.io
 - Documentation: https://www.terraform.io/docs/providers/hcloud/index.html
 
-<img src="https://cdn.rawgit.com/hashicorp/terraform-website/master/content/source/assets/images/logo-hashicorp.svg" width="600px">
-
 Requirements
 ------------
 
--	[Terraform](https://www.terraform.io/downloads.html) 1.0.x
--	[Go](https://golang.org/doc/install) 1.18.x (to build the provider plugin)
+-	[Terraform](https://www.terraform.io/downloads.html) 1.2.x
+-	[Go](https://golang.org/doc/install) 1.19.x (to build the provider plugin)
 
 API Stability
 -------------

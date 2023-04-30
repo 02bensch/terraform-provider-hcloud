@@ -21,7 +21,7 @@ func TestAccHcloudDataSourceServerTypeTest(t *testing.T) {
 		ServerTypeID: "1",
 	}
 	stByID.SetRName("st_by_id")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:  e2etests.PreCheck(t),
 		Providers: e2etests.Providers(),
 		Steps: []resource.TestStep{
@@ -37,12 +37,14 @@ func TestAccHcloudDataSourceServerTypeTest(t *testing.T) {
 					resource.TestCheckResourceAttr(stByName.TFID(), "description", "CX11"),
 					resource.TestCheckResourceAttr(stByName.TFID(), "cores", "1"),
 					resource.TestCheckResourceAttr(stByName.TFID(), "memory", "2"),
+					resource.TestCheckResourceAttr(stByName.TFID(), "architecture", "x86"),
 
 					resource.TestCheckResourceAttr(stByID.TFID(), "id", "1"),
 					resource.TestCheckResourceAttr(stByID.TFID(), "name", "cx11"),
 					resource.TestCheckResourceAttr(stByID.TFID(), "description", "CX11"),
 					resource.TestCheckResourceAttr(stByID.TFID(), "cores", "1"),
 					resource.TestCheckResourceAttr(stByID.TFID(), "memory", "2"),
+					resource.TestCheckResourceAttr(stByID.TFID(), "architecture", "x86"),
 				),
 			},
 		},
@@ -54,7 +56,7 @@ func TestAccHcloudDataSourceServerTypesTest(t *testing.T) {
 
 	servertypesD := &servertype.DDataList{}
 	servertypesD.SetRName("ds")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:  e2etests.PreCheck(t),
 		Providers: e2etests.Providers(),
 		Steps: []resource.TestStep{

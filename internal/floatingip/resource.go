@@ -64,8 +64,8 @@ func Resource() *schema.Resource {
 				Type:     schema.TypeMap,
 				Optional: true,
 				ValidateDiagFunc: func(i interface{}, path cty.Path) diag.Diagnostics {
-					if ok, error := hcloud.ValidateResourceLabels(i.(map[string]interface{})); !ok {
-						return diag.Errorf(error.Error())
+					if ok, err := hcloud.ValidateResourceLabels(i.(map[string]interface{})); !ok {
+						return diag.Errorf(err.Error())
 					}
 					return nil
 				},
@@ -84,10 +84,10 @@ func resourceFloatingIPCreate(ctx context.Context, d *schema.ResourceData, m int
 
 	opts := hcloud.FloatingIPCreateOpts{
 		Type:        hcloud.FloatingIPType(d.Get("type").(string)),
-		Description: hcloud.String(d.Get("description").(string)),
+		Description: hcloud.Ptr(d.Get("description").(string)),
 	}
 	if name, ok := d.GetOk("name"); ok {
-		opts.Name = hcloud.String(name.(string))
+		opts.Name = hcloud.Ptr(name.(string))
 	}
 	if serverID, ok := d.GetOk("server_id"); ok {
 		opts.Server = &hcloud.Server{ID: serverID.(int)}
@@ -233,8 +233,8 @@ func resourceFloatingIPUpdate(ctx context.Context, d *schema.ResourceData, m int
 	}
 
 	if d.HasChange("delete_protection") {
-		delete := d.Get("delete_protection").(bool)
-		if err := setProtection(ctx, client, floatingIP, delete); err != nil {
+		deletionProtection := d.Get("delete_protection").(bool)
+		if err := setProtection(ctx, client, floatingIP, deletionProtection); err != nil {
 			return hcclient.ErrorToDiag(err)
 		}
 	}
@@ -315,9 +315,5 @@ func setProtection(ctx context.Context, c *hcloud.Client, f *hcloud.FloatingIP, 
 		return err
 	}
 
-	if err := hcclient.WaitForAction(ctx, &c.Action, action); err != nil {
-		return err
-	}
-
-	return nil
+	return hcclient.WaitForAction(ctx, &c.Action, action)
 }

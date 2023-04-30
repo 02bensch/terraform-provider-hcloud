@@ -9,6 +9,7 @@ import (
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/sshkey"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 	"github.com/hetznercloud/hcloud-go/hcloud"
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/loadbalancer"
 	"github.com/hetznercloud/terraform-provider-hcloud/internal/network"
@@ -33,7 +34,7 @@ func TestAccHcloudLoadBalancerTarget_ServerTarget(t *testing.T) {
 		SSHKeys: []string{resSSHKey.TFID() + ".id"},
 	}
 	resServer.SetRName("lb-server-target")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     e2etests.PreCheck(t),
 		Providers:    e2etests.Providers(),
 		CheckDestroy: testsupport.CheckResourcesDestroyed(loadbalancer.ResourceType, loadbalancer.ByID(t, nil)),
@@ -71,6 +72,12 @@ func TestAccHcloudLoadBalancerTarget_ServerTarget(t *testing.T) {
 					testsupport.LiftTCF(hasServerTarget(&lb, &srv)),
 				),
 			},
+			{
+				ResourceName:      loadbalancer.TargetResourceType + ".lb-test-target",
+				ImportState:       true,
+				ImportStateIdFunc: loadBalancerTargetImportStateIDFunc("target-test-lb", hcloud.LoadBalancerTargetTypeServer, "lb-server-target"),
+				ImportStateVerify: true,
+			},
 		},
 	})
 }
@@ -97,7 +104,7 @@ func TestAccHcloudLoadBalancerTarget_ServerTarget_UsePrivateIP(t *testing.T) {
 		IPRange: "10.0.0.0/16",
 	}
 	resNetwork.SetRName("lb-target-test-network")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     e2etests.PreCheck(t),
 		Providers:    e2etests.Providers(),
 		CheckDestroy: testsupport.CheckResourcesDestroyed(loadbalancer.ResourceType, loadbalancer.ByID(t, nil)),
@@ -150,6 +157,12 @@ func TestAccHcloudLoadBalancerTarget_ServerTarget_UsePrivateIP(t *testing.T) {
 					testsupport.LiftTCF(hasServerTarget(&lb, &srv)),
 				),
 			},
+			{
+				ResourceName:      loadbalancer.TargetResourceType + ".lb-test-target",
+				ImportState:       true,
+				ImportStateIdFunc: loadBalancerTargetImportStateIDFunc("target-test-lb", hcloud.LoadBalancerTargetTypeServer, "lb-server-target"),
+				ImportStateVerify: true,
+			},
 		},
 	})
 }
@@ -173,7 +186,7 @@ func TestAccHcloudLoadBalancerTarget_LabelSelectorTarget(t *testing.T) {
 		SSHKeys: []string{resSSHKey.TFID() + ".id"},
 	}
 	resServer.SetRName("lb-server-target")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     e2etests.PreCheck(t),
 		Providers:    e2etests.Providers(),
 		CheckDestroy: testsupport.CheckResourcesDestroyed(loadbalancer.ResourceType, loadbalancer.ByID(t, nil)),
@@ -204,6 +217,12 @@ func TestAccHcloudLoadBalancerTarget_LabelSelectorTarget(t *testing.T) {
 						loadbalancer.TargetResourceType+".lb-test-target", "label_selector", selector),
 					testsupport.LiftTCF(hasLabelSelectorTarget(&lb, selector)),
 				),
+			},
+			{
+				ResourceName:      loadbalancer.TargetResourceType + ".lb-test-target",
+				ImportState:       true,
+				ImportStateIdFunc: loadBalancerTargetImportStateIDFunc("target-test-lb", hcloud.LoadBalancerTargetTypeLabelSelector, selector),
+				ImportStateVerify: true,
 			},
 		},
 	})
@@ -243,7 +262,7 @@ func TestAccHcloudLoadBalancerTarget_LabelSelectorTarget_UsePrivateIP(t *testing
 	resSubNet.SetRName("lb-target-test-sub-network")
 
 	selector := fmt.Sprintf("tf-test=tf-test-%d", tmplMan.RandInt)
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     e2etests.PreCheck(t),
 		Providers:    e2etests.Providers(),
 		CheckDestroy: testsupport.CheckResourcesDestroyed(loadbalancer.ResourceType, loadbalancer.ByID(t, nil)),
@@ -299,6 +318,12 @@ func TestAccHcloudLoadBalancerTarget_LabelSelectorTarget_UsePrivateIP(t *testing
 					testsupport.LiftTCF(hasLabelSelectorTarget(&lb, selector)),
 				),
 			},
+			{
+				ResourceName:      loadbalancer.TargetResourceType + ".lb-test-target",
+				ImportState:       true,
+				ImportStateIdFunc: loadBalancerTargetImportStateIDFunc("target-test-lb", hcloud.LoadBalancerTargetTypeLabelSelector, selector),
+				ImportStateVerify: true,
+			},
 		},
 	})
 }
@@ -310,7 +335,7 @@ func TestAccHcloudLoadBalancerTarget_IPTarget(t *testing.T) {
 
 	ip := "213.239.214.25"
 	tmplMan := testtemplate.Manager{}
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     e2etests.PreCheck(t),
 		Providers:    e2etests.Providers(),
 		CheckDestroy: testsupport.CheckResourcesDestroyed(loadbalancer.ResourceType, loadbalancer.ByID(t, nil)),
@@ -338,6 +363,12 @@ func TestAccHcloudLoadBalancerTarget_IPTarget(t *testing.T) {
 						loadbalancer.TargetResourceType+".lb-test-target", "ip", ip),
 					testsupport.LiftTCF(hasIPTarget(&lb, ip)),
 				),
+			},
+			{
+				ResourceName:      loadbalancer.TargetResourceType + ".lb-test-target",
+				ImportState:       true,
+				ImportStateIdFunc: loadBalancerTargetImportStateIDFunc("target-test-lb", hcloud.LoadBalancerTargetTypeIP, ip),
+				ImportStateVerify: true,
 			},
 		},
 	})
@@ -373,5 +404,28 @@ func hasIPTarget(lb *hcloud.LoadBalancer, ip string) func() error {
 			}
 		}
 		return fmt.Errorf("load balancer %d: no ip target: %s", lb.ID, ip)
+	}
+}
+
+// loadBalancerTargetImportStateIDFunc builds the import ID for load balancer targets.
+// In case the "server" type is used, pass the terraform resource name as the identifier, the
+// function will automatically get the appropriate ID from terraform state.
+// nolint:unparam
+func loadBalancerTargetImportStateIDFunc(loadBalancerResourceName string, tgtType hcloud.LoadBalancerTargetType, identifier string) resource.ImportStateIdFunc {
+	return func(s *terraform.State) (string, error) {
+		lb, ok := s.RootModule().Resources[fmt.Sprintf("%s.%s", loadbalancer.ResourceType, loadBalancerResourceName)]
+		if !ok {
+			return "", fmt.Errorf("load balancer not found: %s", loadBalancerResourceName)
+		}
+
+		if tgtType == hcloud.LoadBalancerTargetTypeServer {
+			server, ok := s.RootModule().Resources[fmt.Sprintf("%s.%s", server.ResourceType, identifier)]
+			if !ok {
+				return "", fmt.Errorf("server not found: %s", identifier)
+			}
+			identifier = server.Primary.ID
+		}
+
+		return fmt.Sprintf("%s__%s__%s", lb.Primary.ID, tgtType, identifier), nil
 	}
 }

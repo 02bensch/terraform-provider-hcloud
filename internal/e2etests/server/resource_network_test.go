@@ -37,11 +37,11 @@ func TestAccHcloudServerNetwork_NetworkID(t *testing.T) {
 	}
 	subNetRes.SetRName("test-network-subnet")
 	sRes := &server.RData{
-		Name:         "s-network-test",
-		Type:         e2etests.TestServerType,
-		LocationName: e2etests.TestLocationName,
-		Image:        e2etests.TestImage,
-		SSHKeys:      []string{sk.TFID() + ".id"},
+		Name:       "s-network-test",
+		Type:       e2etests.TestServerType,
+		Datacenter: e2etests.TestDataCenter,
+		Image:      e2etests.TestImage,
+		SSHKeys:    []string{sk.TFID() + ".id"},
 	}
 	sRes.SetRName("s-network-test")
 	sNRes := &server.RDataNetwork{
@@ -52,7 +52,7 @@ func TestAccHcloudServerNetwork_NetworkID(t *testing.T) {
 		DependsOn: []string{subNetRes.TFID()},
 	}
 	tmplMan := testtemplate.Manager{}
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     e2etests.PreCheck(t),
 		Providers:    e2etests.Providers(),
 		CheckDestroy: testsupport.CheckResourcesDestroyed(server.ResourceType, server.ByID(t, nil)),
@@ -106,16 +106,16 @@ func TestAccHcloudServerNetwork_SubNetID(t *testing.T) {
 	}
 	subNetRes.SetRName("test-network-subnet")
 	sRes := &server.RData{
-		Name:         "s-network-test",
-		Type:         e2etests.TestServerType,
-		LocationName: e2etests.TestLocationName,
-		Image:        e2etests.TestImage,
-		SSHKeys:      []string{sk.TFID() + ".id"},
+		Name:       "s-network-test",
+		Type:       e2etests.TestServerType,
+		Datacenter: e2etests.TestDataCenter,
+		Image:      e2etests.TestImage,
+		SSHKeys:    []string{sk.TFID() + ".id"},
 	}
 	sRes.SetRName("s-network-test")
 
 	tmplMan := testtemplate.Manager{}
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     e2etests.PreCheck(t),
 		Providers:    e2etests.Providers(),
 		CheckDestroy: testsupport.CheckResourcesDestroyed(server.ResourceType, server.ByID(t, nil)),

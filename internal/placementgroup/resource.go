@@ -16,10 +16,10 @@ const ResourceType = "hcloud_placement_group"
 
 func Resource() *schema.Resource {
 	return &schema.Resource{
-		CreateContext: create,
-		ReadContext:   read,
-		UpdateContext: update,
-		DeleteContext: delete,
+		CreateContext: resourcePlacementGroupCreate,
+		ReadContext:   resourcePlacementGroupRead,
+		UpdateContext: resourcePlacementGroupUpdate,
+		DeleteContext: resourcePlacementGroupDelete,
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -63,7 +63,7 @@ func Resource() *schema.Resource {
 	}
 }
 
-func create(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func resourcePlacementGroupCreate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	client := m.(*hcloud.Client)
 
 	opts := hcloud.PlacementGroupCreateOpts{
@@ -82,18 +82,18 @@ func create(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Dia
 	if err != nil {
 		return hcclient.ErrorToDiag(err)
 	}
+	d.SetId(strconv.Itoa(res.PlacementGroup.ID))
+
 	if res.Action != nil {
 		if err := hcclient.WaitForAction(ctx, &client.Action, res.Action); err != nil {
 			return hcclient.ErrorToDiag(err)
 		}
 	}
 
-	d.SetId(strconv.Itoa(res.PlacementGroup.ID))
-
-	return read(ctx, d, m)
+	return resourcePlacementGroupRead(ctx, d, m)
 }
 
-func read(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func resourcePlacementGroupRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	client := m.(*hcloud.Client)
 
 	id, err := strconv.Atoi(d.Id())
@@ -117,7 +117,7 @@ func read(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagn
 	return nil
 }
 
-func update(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func resourcePlacementGroupUpdate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	client := m.(*hcloud.Client)
 
 	id, err := strconv.Atoi(d.Id())
@@ -168,10 +168,10 @@ func update(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Dia
 	}
 	d.Partial(false)
 
-	return read(ctx, d, m)
+	return resourcePlacementGroupRead(ctx, d, m)
 }
 
-func delete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func resourcePlacementGroupDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	client := m.(*hcloud.Client)
 
 	id, err := strconv.Atoi(d.Id())

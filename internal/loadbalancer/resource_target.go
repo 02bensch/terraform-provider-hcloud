@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -22,6 +23,7 @@ import (
 const TargetResourceType = "hcloud_load_balancer_target"
 
 var errLoadBalancerTargetNotFound = errors.New("load balancer target not found")
+var errLoadBalancerNotFound = errors.New("load balancer not found")
 
 // TargetResource creates a Terraform schema for the
 // hcloud_load_balancer_target resource.
@@ -32,6 +34,9 @@ func TargetResource() *schema.Resource {
 		ReadContext:   resourceLoadBalancerTargetRead,
 		UpdateContext: resourceLoadBalancerTargetUpdate,
 		DeleteContext: resourceLoadBalancerTargetDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: resourceLoadBalancerTargetImport,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"type": {
@@ -46,6 +51,7 @@ func TargetResource() *schema.Resource {
 			"load_balancer_id": {
 				Type:     schema.TypeInt,
 				Required: true,
+				ForceNew: true,
 			},
 			"server_id": {
 				Type:         schema.TypeInt,
@@ -146,7 +152,7 @@ func resourceLoadBalancerCreateServerTarget(
 	}
 	if v, ok := d.GetOk("use_private_ip"); ok {
 		usePrivateIP = v.(bool)
-		opts.UsePrivateIP = hcloud.Bool(usePrivateIP)
+		opts.UsePrivateIP = hcloud.Ptr(usePrivateIP)
 	}
 
 	err = control.Retry(control.DefaultRetries, func() error {
@@ -200,7 +206,7 @@ func resourceLoadBalancerCreateLabelSelectorTarget(
 	}
 
 	if v, ok := d.GetOk("use_private_ip"); ok {
-		opts.UsePrivateIP = hcloud.Bool(v.(bool))
+		opts.UsePrivateIP = hcloud.Ptr(v.(bool))
 	}
 
 	tgt = hcloud.LoadBalancerTarget{
@@ -257,7 +263,7 @@ func resourceLoadBalancerTargetRead(ctx context.Context, d *schema.ResourceData,
 	tgtType := hcloud.LoadBalancerTargetType(d.Get("type").(string))
 
 	_, tgt, err := findLoadBalancerTarget(ctx, client, lbID, tgtType, d)
-	if errors.Is(err, errLoadBalancerTargetNotFound) {
+	if errors.Is(err, errLoadBalancerTargetNotFound) || errors.Is(err, errLoadBalancerNotFound) {
 		d.SetId("")
 		return nil
 	}
@@ -269,13 +275,70 @@ func resourceLoadBalancerTargetRead(ctx context.Context, d *schema.ResourceData,
 	return nil
 }
 
+// resourceLoadBalancerTargetImport parses the passed ID and tries to import a
+// matching load balancer target.
+// The passed ID has the format `<load-balancer-id>__<type>__<identifier>`.
+func resourceLoadBalancerTargetImport(ctx context.Context, d *schema.ResourceData, m interface{}) ([]*schema.ResourceData, error) {
+	parts := strings.SplitN(d.Id(), "__", 3) // split into at-most 3 parts, everything after that might be label_selector
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("import id has invalid format: %s", d.Id())
+	}
+
+	// Parse and set load balancer id
+	lbID, err := strconv.ParseInt(parts[0], 10, 0)
+	if err != nil {
+		return nil, fmt.Errorf("load balancer id is not an integer: %s", parts[0])
+	}
+	if err := d.Set("load_balancer_id", lbID); err != nil {
+		// We previously verified that lbID is an int
+		return nil, err
+	}
+
+	// Parse and set type
+	tgtType := hcloud.LoadBalancerTargetType(parts[1])
+	if err := d.Set("type", tgtType); err != nil {
+		return nil, err
+	}
+
+	// Set identifier depending on type
+	identifier := parts[2]
+	switch tgtType {
+	case hcloud.LoadBalancerTargetTypeServer:
+		srvID, err := strconv.ParseInt(identifier, 10, 0)
+		if err != nil {
+			return nil, fmt.Errorf("server id is not an integer: %s", identifier)
+		}
+		if err := d.Set("server_id", srvID); err != nil {
+			return nil, err
+		}
+	case hcloud.LoadBalancerTargetTypeLabelSelector:
+		if err := d.Set("label_selector", identifier); err != nil {
+			return nil, err
+		}
+	case hcloud.LoadBalancerTargetTypeIP:
+		if err := d.Set("ip", identifier); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported target type: %s", tgtType)
+	}
+
+	// Read existing state from api and finish resource
+	diag := resourceLoadBalancerTargetRead(ctx, d, m)
+	if diag.HasError() {
+		return nil, fmt.Errorf("importing the actual state of load balancer target failed: %v", diag)
+	}
+
+	return []*schema.ResourceData{d}, nil
+}
+
 func resourceLoadBalancerTargetUpdate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	client := m.(*hcloud.Client)
 	lbID := d.Get("load_balancer_id").(int)
 	tgtType := hcloud.LoadBalancerTargetType(d.Get("type").(string))
 
 	lb, tgt, err := findLoadBalancerTarget(ctx, client, lbID, tgtType, d)
-	if errors.Is(err, errLoadBalancerTargetNotFound) {
+	if errors.Is(err, errLoadBalancerTargetNotFound) || errors.Is(err, errLoadBalancerNotFound) {
 		d.SetId("")
 		return nil
 	}
@@ -294,7 +357,7 @@ func resourceLoadBalancerTargetDelete(ctx context.Context, d *schema.ResourceDat
 	lbID := d.Get("load_balancer_id").(int)
 
 	lb, tgt, err := findLoadBalancerTarget(ctx, client, lbID, tgtType, d)
-	if errors.Is(err, errLoadBalancerTargetNotFound) {
+	if errors.Is(err, errLoadBalancerTargetNotFound) || errors.Is(err, errLoadBalancerNotFound) {
 		return nil
 	}
 	if err != nil {
@@ -358,7 +421,7 @@ func findLoadBalancerTarget(
 		return nil, hcloud.LoadBalancerTarget{}, fmt.Errorf("get load balancer by id: %d: %v", lbID, err)
 	}
 	if lb == nil {
-		return nil, hcloud.LoadBalancerTarget{}, fmt.Errorf("load balancer %d: not found", lbID)
+		return nil, hcloud.LoadBalancerTarget{}, errLoadBalancerNotFound
 	}
 	if v, ok := d.GetOk("server_id"); ok {
 		serverID = v.(int)

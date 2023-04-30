@@ -83,8 +83,8 @@ func UploadedResource() *schema.Resource {
 				Optional: true,
 				Elem:     schema.TypeString,
 				ValidateDiagFunc: func(i interface{}, path cty.Path) diag.Diagnostics {
-					if ok, error := hcloud.ValidateResourceLabels(i.(map[string]interface{})); !ok {
-						return diag.Errorf(error.Error())
+					if ok, err := hcloud.ValidateResourceLabels(i.(map[string]interface{})); !ok {
+						return diag.Errorf(err.Error())
 					}
 					return nil
 				},
@@ -230,10 +230,10 @@ func createManagedResource(ctx context.Context, d *schema.ResourceData, m interf
 	if err != nil {
 		return hcclient.ErrorToDiag(err)
 	}
+	d.SetId(strconv.Itoa(res.Certificate.ID))
 	if err := hcclient.WaitForAction(ctx, &c.Action, res.Action); err != nil {
 		return hcclient.ErrorToDiag(err)
 	}
-	d.SetId(strconv.Itoa(res.Certificate.ID))
 
 	return readResource(ctx, d, m)
 }
@@ -368,7 +368,7 @@ func uploadedAndManagedResourceV0() *schema.Resource {
 }
 
 func upgradeUploadedAndManagedResourceV0(
-	_ context.Context, rawState map[string]interface{}, meta interface{},
+	_ context.Context, rawState map[string]interface{}, _ interface{},
 ) (map[string]interface{}, error) {
 	fields := []string{"created", "not_valid_before", "not_valid_after"}
 	for _, field := range fields {

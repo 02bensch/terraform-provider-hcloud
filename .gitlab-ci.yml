@@ -3,7 +3,7 @@ stages:
 
 test:acceptance:
   stage: test
-  image: golang:1.18
+  image: golang:1.19
   except:
     - tags
   script:
@@ -13,7 +13,7 @@ test:acceptance:
 
 test:golangci-lint:
   stage: test
-  image: golangci/golangci-lint:v1.36
+  image: golangci/golangci-lint:latest
   script:
     - golangci-lint run -v
   except:
